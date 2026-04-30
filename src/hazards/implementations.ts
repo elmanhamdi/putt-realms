@@ -166,7 +166,10 @@ class WindmillHazard extends BaseHazard {
   private angle = 0;
   private readonly cx: number;
   private readonly cz: number;
-  private readonly armLen: number;
+  /** World-space half blade reach in XZ (center → tip), from mesh bounds */
+  private armHalfLen!: number;
+  /** Added to {@link HazardBallContext.radius} for hit test — matches blade width in XZ */
+  private hitExtra!: number;
   /** Always positive — one-way spin */
   private readonly spin = 2.65;
   private readonly rx: number;
@@ -195,9 +198,6 @@ class WindmillHazard extends BaseHazard {
 
     const glb = assetRegistry.getModelClone("hazard_windmill");
     const armBase = LANE_HALF_WIDTH * 1.12 * WINDMILL_SCALE;
-    this.armLen = glb
-      ? armBase * (WINDMILL_GLB_SCALE / WINDMILL_SCALE)
-      : armBase;
     if (glb) {
       this.group.add(glb);
       this.armSpin =
@@ -206,12 +206,13 @@ class WindmillHazard extends BaseHazard {
       this.group.scale.setScalar(WINDMILL_GLB_SCALE);
       this.group.position.set(cx, 0, cz);
       this.group.rotation.y = rotationY;
+      this.syncArmCollisionFromMesh();
       return;
     }
 
     const arm = new THREE.Mesh(
       new THREE.BoxGeometry(
-        this.armLen * 2,
+        armBase * 2,
         0.14 * WINDMILL_SCALE,
         ARM_THICK * WINDMILL_SCALE,
       ),
@@ -224,6 +225,26 @@ class WindmillHazard extends BaseHazard {
 
     this.group.position.set(cx, 0, cz);
     this.group.rotation.y = rotationY;
+    this.syncArmCollisionFromMesh();
+  }
+
+  /** Align segment length + hit thickness with the actual scaled mesh (fixes GLB vs math mismatch). */
+  private syncArmCollisionFromMesh(): void {
+    this.group.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(this.armSpin);
+    const e = box.getSize(new THREE.Vector3());
+    const reach = 0.5 * Math.hypot(e.x, e.z);
+    this.armHalfLen = THREE.MathUtils.clamp(
+      reach + BALL_RADIUS * 0.02,
+      0.7,
+      5.0,
+    );
+    const lateral = Math.min(e.x, e.z);
+    this.hitExtra = Math.max(
+      ARM_THICK * WINDMILL_SCALE * 0.52,
+      lateral * 0.28,
+      0.11,
+    );
   }
 
   update(dt: number): void {
@@ -240,8 +261,8 @@ class WindmillHazard extends BaseHazard {
     void _dt;
     const vx = Math.cos(this.angle);
     const vz = Math.sin(this.angle);
-    const hx = this.armLen * (vx * this.rx + vz * this.fx);
-    const hz = this.armLen * (vx * this.rz + vz * this.fz);
+    const hx = this.armHalfLen * (vx * this.rx + vz * this.fx);
+    const hz = this.armHalfLen * (vx * this.rz + vz * this.fz);
     const ax = this.cx - hx;
     const az = this.cz - hz;
     const bx = this.cx + hx;
@@ -258,7 +279,7 @@ class WindmillHazard extends BaseHazard {
     const dx = ctx.position.x - qx;
     const dz = ctx.position.z - qz;
     const dist = Math.hypot(dx, dz);
-    const hitR = ctx.radius + ARM_THICK * 0.55;
+    const hitR = ctx.radius + this.hitExtra;
     if (dist > hitR) return false;
 
     /** Segment direction */
