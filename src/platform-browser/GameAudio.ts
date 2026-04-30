@@ -1,12 +1,13 @@
 import { RunPhase } from "../core/RunStateMachine";
+import { publicUrl } from "../core/publicPath";
 
 const PATH = {
-  hit: "/assets/audio/hit.ogg",
-  ball: "/assets/audio/ball_interaction.ogg",
-  bell: "/assets/audio/bell.wav",
-  bg1: "/assets/audio/bg_1.ogg",
-  bg2: "/assets/audio/bg_2.ogg",
-  bg3: "/assets/audio/bg_3.ogg",
+  hit: publicUrl("assets/audio/hit.ogg"),
+  ball: publicUrl("assets/audio/ball_interaction.ogg"),
+  bell: publicUrl("assets/audio/bell.wav"),
+  bg1: publicUrl("assets/audio/bg_1.ogg"),
+  bg2: publicUrl("assets/audio/bg_2.ogg"),
+  bg3: publicUrl("assets/audio/bg_3.ogg"),
 } as const;
 
 /** Level BGM order: was bg2/bg3 alternating; `bg_1` is the third track per round. */

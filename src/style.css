@@ -196,7 +196,7 @@ body {
   border: none;
   border-radius: 0;
   box-shadow: none;
-  background-image: url("/assets/textures/level_background.png");
+  background-image: url(./assets/textures/level_background.png);
   background-repeat: no-repeat;
   background-position: 50% 48%;
   background-size: 100% auto;
@@ -245,7 +245,7 @@ body {
   border: none;
   border-radius: 0;
   box-shadow: none;
-  background-image: url("/assets/ui/hud_strokes_badge.png");
+  background-image: url(./ui/hud_strokes_badge.png);
   background-repeat: no-repeat;
   background-position: 50% 42%;
   background-size: 100% auto;

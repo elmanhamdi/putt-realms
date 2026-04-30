@@ -1,5 +1,8 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { publicUrl } from "../core/publicPath";
+
+const DEFAULT_MODELS_BASE = publicUrl("assets/models/");
 
 /**
  * Central registry for optional GLB/GLTF meshes. Gameplay never depends on assets loading.
@@ -73,7 +76,7 @@ export class AssetRegistry {
    * Wait until this asset has finished loading (success or failure).
    * Safe to call many times; concurrent callers share one promise.
    */
-  preloadAsset(key: AssetKey, basePath = "/assets/models/"): Promise<void> {
+  preloadAsset(key: AssetKey, basePath = DEFAULT_MODELS_BASE): Promise<void> {
     if (this.cache.has(key)) return Promise.resolve();
     let p = this.loadPromises.get(key);
     if (!p) {
@@ -89,7 +92,7 @@ export class AssetRegistry {
    * Fire-and-forget: loads all known assets in the background. Safe to call once at boot.
    * Never throws; failures store `null` in cache.
    */
-  startBackgroundPreload(basePath = "/assets/models/"): void {
+  startBackgroundPreload(basePath = DEFAULT_MODELS_BASE): void {
     for (const k of ALL_KEYS) {
       void this.preloadAsset(k, basePath);
     }

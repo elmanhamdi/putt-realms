@@ -26,11 +26,7 @@ jobs:
           cache: npm
 
       - name: Install and build
-        run: |
-          npm ci
-          npm run build
-        env:
-          GITHUB_ACTIONS: "true"
+        run: npm ci && npm run build
 
       - uses: actions/upload-pages-artifact@v3
         with:
