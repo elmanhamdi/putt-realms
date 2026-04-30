@@ -16,10 +16,12 @@ function disposeLoadedSubtree(root: THREE.Object3D): void {
 }
 
 /**
- * Procedural sphere + tiled dimple albedo/bump (see Materials.ts).
+ * Sphere mesh + `golf_ball.png` albedo (see Materials.ts).
  */
 export class Ball extends THREE.Group {
   static readonly RADIUS = BALL_RADIUS;
+
+  private static readonly _rollAxis = new THREE.Vector3();
 
   readonly visualRoot = new THREE.Group();
   private primaryMesh: THREE.Mesh | null = null;
@@ -61,6 +63,25 @@ export class Ball extends THREE.Group {
   resetVisual(): void {
     this.visualRoot.scale.setScalar(1);
     this.visualRoot.position.y = 0;
+    this.visualRoot.quaternion.identity();
+    if (this.primaryMesh) {
+      this.primaryMesh.quaternion.identity();
+    }
+  }
+
+  /**
+   * Rolling-without-slip around the sphere center: ω = (vz/R, 0, -vx/R).
+   * Applied on `primaryMesh` (pivot at ball center), not `visualRoot` (pivot at ground) — that mismatch caused visible “bouncing”.
+   */
+  applyPlanarRoll(vx: number, vz: number, dt: number, radius: number): void {
+    if (!this.primaryMesh) return;
+    const speed = Math.hypot(vx, vz);
+    if (speed < 1e-5 || dt <= 0 || radius < 1e-5) return;
+    const inv = 1 / radius;
+    Ball._rollAxis.set(vz * inv, 0, -vx * inv);
+    const angle = speed * inv * dt;
+    Ball._rollAxis.normalize();
+    this.primaryMesh.rotateOnWorldAxis(Ball._rollAxis, angle);
   }
 
   /** Multiplies map — blend slightly toward white so tint doesn’t flatten dimples */

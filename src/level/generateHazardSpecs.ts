@@ -1,5 +1,5 @@
 import { hazardWeight, type HazardKind } from "../hazards/HazardTypes";
-import type { HazardSpawnSpec } from "./LevelTypes";
+import type { HazardSpawnSpec, PlacedTile } from "./LevelTypes";
 
 const ALL_KINDS: HazardKind[] = [
   "windmill",
@@ -7,6 +7,7 @@ const ALL_KINDS: HazardKind[] = [
   "fan",
   "bridge",
   "axe",
+  "boost",
 ];
 
 function shuffleInPlace<T>(arr: T[], rng: () => number): void {
@@ -21,12 +22,15 @@ function pickKind(rng: () => number): HazardKind {
 }
 
 /**
- * Eligible path tile indices: not start (0), not first step (1), not hole (last).
+ * Hazard meshes assume a single straight lane along tile-local +Z.
+ * Corner/curve tiles are an L — the same layout blocks the wrong leg or the bend.
  */
-function eligibleTileIndices(pathLength: number): number[] {
+function eligibleStraightTileIndices(tiles: readonly PlacedTile[]): number[] {
   const out: number[] = [];
-  for (let i = 2; i <= pathLength - 2; i++) {
-    out.push(i);
+  for (let i = 2; i <= tiles.length - 2; i++) {
+    if (tiles[i].type === "straight") {
+      out.push(i);
+    }
   }
   return out;
 }
@@ -36,12 +40,12 @@ function eligibleTileIndices(pathLength: number): number[] {
  */
 export function generateHazardSpecs(
   levelIndex: number,
-  pathLength: number,
+  tiles: readonly PlacedTile[],
   rng: () => number,
 ): HazardSpawnSpec[] {
   if (levelIndex === 1) return [];
 
-  const eligible = eligibleTileIndices(pathLength);
+  const eligible = eligibleStraightTileIndices(tiles);
   if (eligible.length === 0) return [];
 
   let count = 0;

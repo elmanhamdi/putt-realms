@@ -19,7 +19,7 @@ export const MIN_DRAG_WORLD = 0.35;
 export const MAX_DRAG_WORLD = 5.5;
 /** Pull length (world units) that reaches 100% power — lower than clamp so typical sweeps can max out */
 export const POWER_FULL_DRAG_WORLD = 3.35;
-export const MAX_SHOT_SPEED = 24;
+export const MAX_SHOT_SPEED = 96;
 
 /** Offer free skip after crawling at low speed away from the cup */
 export const STUCK_SKIP_PLANAR_SPEED = 0.11;
@@ -33,10 +33,10 @@ export const PHYS_SETTLE_SPEED = 0.06;
 export const WALL_RESTITUTION = 0.82;
 /** Downward acceleration (world Y-up) */
 export const GRAVITY = 38;
-/** Upward kick vs planar shot speed — ball flies in an arc */
-export const SHOT_LOB_RATIO = 0.44;
-/** After landing on grass, damp vertical bounce */
-export const GROUND_RESTITUTION_Y = 0.32;
+/** Upward kick vs planar shot speed — 0 = roll on deck without hop */
+export const SHOT_LOB_RATIO = 0;
+/** After landing on grass, damp vertical bounce — 0 = no post-landing hop */
+export const GROUND_RESTITUTION_Y = 0;
 /** Out-of-bounds when ball falls this far below the deck */
 export const FALL_OOB_Y = -16;
 

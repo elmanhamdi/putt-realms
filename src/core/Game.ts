@@ -58,6 +58,7 @@ import {
   RunPhase,
   RunStateMachine,
 } from "./RunStateMachine";
+import { GameAudio } from "../platform-browser/GameAudio";
 
 /** Cup mesh is tilted to XZ — spin around world Y so the portal swirls in the grass plane */
 const HOLE_PORTAL_WORLD_UP = new THREE.Vector3(0, 1, 0);
@@ -177,7 +178,9 @@ export class Game {
   };
 
   private hazardInstances: HazardInstance[] = [];
+  private holeFlagMixers: THREE.AnimationMixer[] = [];
   private hazardHitFlashClear = 0;
+  private readonly keyLight: THREE.DirectionalLight;
 
   private generatedLevel!: GeneratedLevel;
   private currentLevelIndex = START_LEVEL_INDEX;
@@ -194,6 +197,7 @@ export class Game {
   /** True after slow-roll “bad lie” timer triggers free skip for this hole */
   private freeSkipFromStuck = false;
   private coinsToastTimer = 0;
+  private readonly audio = new GameAudio();
 
   private gameplayRect = { x: 0, y: 0, width: 1, height: 1 };
   private lastFrameTime = 0;
@@ -223,14 +227,23 @@ export class Game {
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.scene.background = new THREE.Color(SKY_BLUE);
 
-    const ambient = new THREE.AmbientLight(0xfff8f0, 0.62);
+    const ambient = new THREE.AmbientLight(0xfff8f0, 0.52);
     this.scene.add(ambient);
-    const key = new THREE.DirectionalLight(0xffefd8, 1.38);
-    key.position.set(10, 22, 14);
-    this.scene.add(key);
+    this.keyLight = new THREE.DirectionalLight(0xffefd8, 1.45);
+    this.keyLight.position.set(10, 26, 14);
+    this.keyLight.castShadow = true;
+    this.keyLight.shadow.mapSize.set(2048, 2048);
+    this.keyLight.shadow.camera.near = 0.4;
+    this.keyLight.shadow.camera.far = 90;
+    this.keyLight.shadow.bias = -0.00025;
+    this.keyLight.shadow.normalBias = 0.03;
+    this.scene.add(this.keyLight);
+    this.scene.add(this.keyLight.target);
     const fill = new THREE.HemisphereLight(0xd8f2ff, 0xd4b898, 0.52);
     this.scene.add(fill);
 
@@ -251,6 +264,7 @@ export class Game {
     this.hud.bindSkip(() => this.requestSkipLevel());
 
     this.run.onPhaseChange((phase) => {
+      this.audio.syncForPhase(phase, this.currentLevelIndex);
       if (phase === RunPhase.PreviewCamera) {
         this.previewTimer = PREVIEW_CAMERA_DURATION;
         computeTopDownCameraPose(
@@ -308,6 +322,7 @@ export class Game {
         this.run.dispatch(RunEvent.AimStarted);
       },
       onShot: (shotDirectionXZ, power01) => {
+        this.audio.playHit();
         this.lastShotPosition.copy(this.ball.position);
         this.run.dispatch(RunEvent.ShotReleased);
         this.strokeController.recordStroke();
@@ -372,7 +387,10 @@ export class Game {
     });
     this.previousDifficultyScore = this.generatedLevel.difficultyScore;
 
-    this.levelBuilder.buildInto(this.courseGroup, this.generatedLevel);
+    this.holeFlagMixers = this.levelBuilder.buildInto(
+      this.courseGroup,
+      this.generatedLevel,
+    );
 
     this.skyBackdrop = createSkyCloudBackdrop(
       this.generatedLevel.bounds,
@@ -387,6 +405,7 @@ export class Game {
     for (const h of this.hazardInstances) {
       this.courseGroup.add(h.group);
     }
+    this.configureShadowsForCourse();
     this.strokeController.resetHole();
 
     const oobMaxZ = this.generatedLevel.bounds.maxZ + OOB_Z_EXTRA;
@@ -399,6 +418,7 @@ export class Game {
     } else {
       this.physics.setBounds(this.generatedLevel.bounds, oobMaxZ);
     }
+    this.physics.setRailColliders(this.generatedLevel.railColliders);
 
     this.placeBallAtTee();
     this.lastShotPosition.copy(this.ball.position);
@@ -443,6 +463,7 @@ export class Game {
   }
 
   private disposeCourse(): void {
+    this.holeFlagMixers = [];
     for (const h of this.hazardInstances) {
       this.courseGroup.remove(h.group);
       h.dispose();
@@ -565,8 +586,20 @@ export class Game {
   start(): void {
     if (this.gameLoopStarted) return;
     this.gameLoopStarted = true;
+    this.audio.tryUnlock();
     this.lastFrameTime = performance.now();
     this.rafId = requestAnimationFrame(this.frame);
+  }
+
+  /** Unlocks audio after title-screen gesture (autoplay policy). */
+  unlockAudio(): void {
+    this.audio.tryUnlock();
+  }
+
+  /** Unlock + start level BGM on first title-screen touch (before `start()` / level phases). */
+  primeAudioOnTitleScreen(): void {
+    this.audio.tryUnlock();
+    this.audio.startEarlyLevelBgm(this.currentLevelIndex);
   }
 
   dispose(): void {
@@ -574,11 +607,43 @@ export class Game {
     window.clearTimeout(this.coinsToastTimer);
     window.clearTimeout(this.hazardHitFlashClear);
     window.removeEventListener("resize", this.onResize);
+    this.audio.dispose();
     this.cameraOrbit.dispose();
     this.input.dispose();
     this.disposeLevelBackdrop();
     this.disposeSkyBackdrop();
     this.disposeCourse();
+  }
+
+  private configureShadowsForCourse(): void {
+    const b = this.generatedLevel.bounds;
+    const pad = 18;
+    const halfW = (b.maxX - b.minX) / 2 + pad;
+    const halfH = (b.maxZ - b.minZ) / 2 + pad;
+    /** Square ortho frustum so angled sun doesn’t clip diagonal fairways */
+    const ext = Math.max(28, halfW, halfH);
+    const cx = (b.minX + b.maxX) / 2;
+    const cz = (b.minZ + b.maxZ) / 2;
+    const oc = this.keyLight.shadow.camera as THREE.OrthographicCamera;
+    oc.left = -ext;
+    oc.right = ext;
+    oc.top = ext;
+    oc.bottom = -ext;
+    oc.updateProjectionMatrix();
+    this.keyLight.target.position.set(cx, 0, cz);
+    this.keyLight.target.updateMatrixWorld();
+
+    this.courseGroup.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      m.receiveShadow = true;
+      const mat = m.material;
+      const mats = Array.isArray(mat) ? mat : [mat];
+      const transparent = mats.some(
+        (x) => (x as THREE.Material).transparent === true,
+      );
+      m.castShadow = !transparent;
+    });
   }
 
   private disposeLevelBackdrop(): void {
@@ -687,6 +752,15 @@ export class Game {
       }
     });
 
+    /** Windmill / axe phase — independent of ball motion */
+    for (const hz of this.hazardInstances) {
+      hz.update(deltaSeconds);
+    }
+
+    for (const m of this.holeFlagMixers) {
+      m.update(deltaSeconds);
+    }
+
     const phase = this.run.getPhase();
 
     if (phase === RunPhase.PreviewCamera) {
@@ -724,10 +798,6 @@ export class Game {
         this.stuckTimer = 0;
       }
 
-      for (const hz of this.hazardInstances) {
-        hz.update(deltaSeconds);
-      }
-
       const hzCtx = {
         position: this.ball.position,
         radius: Ball.RADIUS,
@@ -761,11 +831,28 @@ export class Game {
         stepEnv,
       );
 
+      /** Roll whenever the ball is on / near the deck (physics y is contact/bottom) */
+      if (
+        this.ball.position.y <= 0.02 &&
+        Math.abs(this.physics.velocity.y) < 0.85
+      ) {
+        this.ball.applyPlanarRoll(
+          this.physics.velocity.x,
+          this.physics.velocity.z,
+          deltaSeconds,
+          Ball.RADIUS,
+        );
+      }
+
       let hazardHit = false;
       for (const hz of this.hazardInstances) {
         if (hz.resolveImpulses(hzCtx, this.physics, deltaSeconds)) {
           hazardHit = true;
         }
+      }
+      const surfaceBump = this.physics.consumeSurfaceContact();
+      if (surfaceBump || hazardHit) {
+        this.audio.playBallBump();
       }
       if (hazardHit) {
         this.flashHazardHit();

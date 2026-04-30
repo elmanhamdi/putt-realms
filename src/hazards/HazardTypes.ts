@@ -3,7 +3,8 @@ export type HazardKind =
   | "sandpit"
   | "fan"
   | "bridge"
-  | "axe";
+  | "axe"
+  | "boost";
 
 /** Authoring weights — must match spawn selection */
 export const HAZARD_WEIGHT: Record<HazardKind, number> = {
@@ -12,6 +13,7 @@ export const HAZARD_WEIGHT: Record<HazardKind, number> = {
   fan: 2.0,
   bridge: 3.5,
   axe: 3.0,
+  boost: 1.8,
 };
 
 export function hazardWeight(kind: HazardKind): number {

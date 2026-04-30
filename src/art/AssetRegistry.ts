@@ -10,18 +10,12 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
  *
  * Example full URL at dev:  http://localhost:5173/assets/models/tile_straight.glb
  *
- * Filenames must match {@link ASSET_FILENAMES} below (e.g. `tile_straight.glb`).
- * Use `.glb` (binary) or `.gltf` — update the extension in ASSET_FILENAMES if you use .gltf.
+ * Use `.glb` (binary) or `.gltf` — update the extension in {@link ASSET_FILENAMES} if you use `.gltf`.
  *
- * ─── Blender / export notes ────────────────────────────────────────────────────
+ * **flag.gltf (hole_flag):** Sketchfab-style exports reference `scene.bin` in the same folder.
+ * Without `scene.bin` next to `flag.gltf`, the load fails and the procedural hole flag is used.
  *
- * - Scale models roughly to match existing procedural tiles (~lane width 4, tile ~6 units).
- * - Name interactive nodes so code can find them:
- *   - Windmill: optional mesh/object name `windmillArm` for spinning blade (else whole asset rotates on Y).
- * - Y-up; tiles expect origin near tile center on XZ, ground at Y≈0.
- *
- * Missing files: load fails silently; {@link getModelClone} keeps returning `null` and
- * procedural placeholders stay in place. The game never awaits loads on the critical path.
+ * Missing files: load fails silently except `console.warn`; {@link getModelClone} returns `null`.
  */
 
 export const ASSET_FILENAMES = {
@@ -38,6 +32,7 @@ export const ASSET_FILENAMES = {
   coin: "coin.glb",
   ball_default: "ball_default.glb",
   ball_gold: "ball_gold.glb",
+  hole_flag: "flag.gltf",
 } as const;
 
 export type AssetKey = keyof typeof ASSET_FILENAMES;
@@ -50,7 +45,8 @@ const ALL_KEYS = Object.keys(ASSET_FILENAMES) as AssetKey[];
 export class AssetRegistry {
   private readonly loader = new GLTFLoader();
   private readonly cache = new Map<AssetKey, CacheEntry>();
-  private readonly inflight = new Set<AssetKey>();
+  private readonly animationClips = new Map<AssetKey, THREE.AnimationClip[]>();
+  private readonly loadPromises = new Map<AssetKey, Promise<void>>();
 
   /**
    * Deep-clone of the cached template for this key, or `null` if unavailable / still loading.
@@ -68,30 +64,79 @@ export class AssetRegistry {
     return e !== undefined && e !== null;
   }
 
+  /** Clips from the last successful GLTF load (empty if none or failed). */
+  getAnimationClips(key: AssetKey): readonly THREE.AnimationClip[] {
+    return this.animationClips.get(key) ?? [];
+  }
+
+  /**
+   * Wait until this asset has finished loading (success or failure).
+   * Safe to call many times; concurrent callers share one promise.
+   */
+  preloadAsset(key: AssetKey, basePath = "/assets/models/"): Promise<void> {
+    if (this.cache.has(key)) return Promise.resolve();
+    let p = this.loadPromises.get(key);
+    if (!p) {
+      p = this.loadOne(key, basePath).finally(() => {
+        this.loadPromises.delete(key);
+      });
+      this.loadPromises.set(key, p);
+    }
+    return p;
+  }
+
   /**
    * Fire-and-forget: loads all known assets in the background. Safe to call once at boot.
    * Never throws; failures store `null` in cache.
    */
   startBackgroundPreload(basePath = "/assets/models/"): void {
-    for (const key of ALL_KEYS) {
-      void this.ensureLoaded(key, basePath);
+    for (const k of ALL_KEYS) {
+      void this.preloadAsset(k, basePath);
     }
   }
 
-  private async ensureLoaded(key: AssetKey, basePath: string): Promise<void> {
-    if (this.cache.has(key) || this.inflight.has(key)) return;
-    this.inflight.add(key);
-    const file = ASSET_FILENAMES[key];
-    const url = `${basePath.replace(/\/?$/, "/")}${file}`;
-    try {
-      const gltf = await this.loader.loadAsync(url);
+  private async loadOne(key: AssetKey, basePath: string): Promise<void> {
+    const base = basePath.replace(/\/?$/, "/");
+
+    const applyGltf = (gltf: {
+      scene: THREE.Object3D;
+      animations: readonly THREE.AnimationClip[];
+    }) => {
       const root = gltf.scene;
       root.name = `asset_${key}`;
       this.cache.set(key, root);
-    } catch {
+      this.animationClips.set(key, [...gltf.animations]);
+    };
+
+    if (key === "hole_flag") {
+      const candidates = ["flag.glb", ASSET_FILENAMES.hole_flag];
+      for (const file of candidates) {
+        const url = `${base}${file}`;
+        try {
+          const gltf = await this.loader.loadAsync(url);
+          applyGltf(gltf);
+          return;
+        } catch (err) {
+          console.warn(`[AssetRegistry] hole_flag failed: ${url}`, err);
+        }
+      }
       this.cache.set(key, null);
-    } finally {
-      this.inflight.delete(key);
+      this.animationClips.set(key, []);
+      console.warn(
+        "[AssetRegistry] hole_flag: place `flag.glb` (single-file) or `flag.gltf` + `scene.bin` in public/assets/models/",
+      );
+      return;
+    }
+
+    const file = ASSET_FILENAMES[key];
+    const url = `${base}${file}`;
+    try {
+      const gltf = await this.loader.loadAsync(url);
+      applyGltf(gltf);
+    } catch (err) {
+      console.warn(`[AssetRegistry] Failed to load ${url}`, err);
+      this.cache.set(key, null);
+      this.animationClips.set(key, []);
     }
   }
 }

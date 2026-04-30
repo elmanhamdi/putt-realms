@@ -29,8 +29,8 @@ export interface PlacedTile {
   worldZ: number;
   /** Rotation around Y so geometry aligns with path (radians). */
   rotationY: number;
-  /** Corner / curve tiles: mesh mirror for left vs right bends */
-  turnRight?: boolean;
+  /** Corner / curve: outer rail offset signs in tile-local space (see bendOuterRails). */
+  railS?: { sx: 1 | -1; sz: 1 | -1 };
 }
 
 /** Axis-aligned playable bounds in world space (xz), for physics clamping. */
@@ -39,6 +39,14 @@ export interface LevelWorldBounds {
   maxX: number;
   minZ: number;
   maxZ: number;
+}
+
+/** Wood rail centerline in world xz — capsule collision in physics (matches TileKit). */
+export interface RailCapsule {
+  ax: number;
+  az: number;
+  bx: number;
+  bz: number;
 }
 
 export interface GeneratedLevel {
@@ -55,4 +63,6 @@ export interface GeneratedLevel {
   startPosition: { x: number; y: number; z: number };
   holePosition: { x: number; y: number; z: number };
   bounds: LevelWorldBounds;
+  /** Procedural cream rails — ball collides, cannot pass through */
+  railColliders: RailCapsule[];
 }

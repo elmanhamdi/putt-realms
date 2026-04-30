@@ -2,10 +2,11 @@ import * as THREE from "three";
 import { assetRegistry } from "../art/AssetRegistry";
 import {
   bladeSteel,
+  boostPadArrowBlue,
   fanStone,
+  hazardBridgeGapRed,
   PSX_SKY_BLUE,
   sandGold,
-  skyBlueTransparent,
   warmCreamStone,
   woodBrown,
 } from "../art/Materials";
@@ -14,11 +15,17 @@ import type { SimpleBallPhysics } from "../gameplay/SimpleBallPhysics";
 import type { HazardSpawnSpec } from "../level/LevelTypes";
 import {
   LANE_HALF_WIDTH,
+  LANE_WIDTH,
   TILE_SIZE,
 } from "../level/TileDimensions";
 import type { HazardBallContext, HazardEnvironmental, HazardInstance } from "./Hazard";
 
-const ARM_THICK = 0.22;
+const ARM_THICK = 0.28;
+/** Visual + collision scale for procedural windmill (GLB gets its own scale) */
+const WINDMILL_SCALE = 0.775;
+const WINDMILL_GLB_SCALE = 0.825;
+const AXE_SCALE = 1.5;
+const AXE_GLB_SCALE = 1.6;
 
 function tileBasis(rotationY: number): {
   fx: number;
@@ -68,6 +75,22 @@ function closestPointOnSegment2D(
   let t = ab2 > 1e-8 ? (apx * abx + apz * abz) / ab2 : 0;
   t = Math.max(0, Math.min(1, t));
   return { x: ax + abx * t, z: az + abz * t, t };
+}
+
+/** GLB windmills often add a grey pole/mast; hide by name so only the big wood arm reads */
+function hideWindmillGreyStaticParts(root: THREE.Object3D, armSpin: THREE.Object3D): void {
+  const re =
+    /pole|mast|tower|column|stem|post|stand|pylon|pedestal|mount|shaft|hub|bearing/i;
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh)) return;
+    if (o === armSpin) return;
+    let p: THREE.Object3D | null = o.parent;
+    while (p) {
+      if (p === armSpin) return;
+      p = p.parent;
+    }
+    if (re.test(o.name)) o.visible = false;
+  });
 }
 
 function reflectVelocityAcrossNormal(
@@ -144,7 +167,12 @@ class WindmillHazard extends BaseHazard {
   private readonly cx: number;
   private readonly cz: number;
   private readonly armLen: number;
-  private readonly spin = 2.1;
+  /** Always positive — one-way spin */
+  private readonly spin = 2.65;
+  private readonly rx: number;
+  private readonly rz: number;
+  private readonly fx: number;
+  private readonly fz: number;
   /** Spin target — procedural arm mesh or GLB node `windmillArm` */
   private readonly armSpin: THREE.Object3D;
 
@@ -154,43 +182,53 @@ class WindmillHazard extends BaseHazard {
     tileKey: string,
     cx: number,
     cz: number,
-    _rotationY: number,
+    rotationY: number,
   ) {
     super(id, weight, tileKey);
     this.cx = cx;
     this.cz = cz;
-    this.armLen = LANE_HALF_WIDTH * 0.92;
+    const b = tileBasis(rotationY);
+    this.rx = b.rx;
+    this.rz = b.rz;
+    this.fx = b.fx;
+    this.fz = b.fz;
 
     const glb = assetRegistry.getModelClone("hazard_windmill");
+    const armBase = LANE_HALF_WIDTH * 1.12 * WINDMILL_SCALE;
+    this.armLen = glb
+      ? armBase * (WINDMILL_GLB_SCALE / WINDMILL_SCALE)
+      : armBase;
     if (glb) {
       this.group.add(glb);
       this.armSpin =
         glb.getObjectByName("windmillArm") ?? glb;
+      hideWindmillGreyStaticParts(glb, this.armSpin);
+      this.group.scale.setScalar(WINDMILL_GLB_SCALE);
       this.group.position.set(cx, 0, cz);
+      this.group.rotation.y = rotationY;
       return;
     }
 
-    const pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.12, 0.16, 1.1, 8),
-      fanStone(),
-    );
-    pole.position.y = 0.55;
-    this.group.add(pole);
-
     const arm = new THREE.Mesh(
-      new THREE.BoxGeometry(this.armLen * 2, 0.12, ARM_THICK),
+      new THREE.BoxGeometry(
+        this.armLen * 2,
+        0.14 * WINDMILL_SCALE,
+        ARM_THICK * WINDMILL_SCALE,
+      ),
       warmCreamStone(),
     );
-    arm.position.y = 1.05;
+    arm.position.y = 0.42 * WINDMILL_SCALE;
     arm.name = "windmillArm";
     this.group.add(arm);
     this.armSpin = arm;
 
     this.group.position.set(cx, 0, cz);
+    this.group.rotation.y = rotationY;
   }
 
   update(dt: number): void {
     this.angle += this.spin * dt;
+    /** Monotonic Y — same spin sense forever (no sin back-and-forth) */
     this.armSpin.rotation.y = this.angle;
   }
 
@@ -200,10 +238,10 @@ class WindmillHazard extends BaseHazard {
     _dt: number,
   ): boolean {
     void _dt;
-    const cos = Math.cos(this.angle);
-    const sin = Math.sin(this.angle);
-    const hx = cos * this.armLen;
-    const hz = sin * this.armLen;
+    const vx = Math.cos(this.angle);
+    const vz = Math.sin(this.angle);
+    const hx = this.armLen * (vx * this.rx + vz * this.fx);
+    const hz = this.armLen * (vx * this.rz + vz * this.fz);
     const ax = this.cx - hx;
     const az = this.cz - hz;
     const bx = this.cx + hx;
@@ -424,6 +462,53 @@ class BridgeHazard extends BaseHazard {
   private readonly fz: number;
   private readonly narrow: number;
 
+  /**
+   * Full hazard ring around the bridge deck: lateral strips + front/back caps
+   * (matches {@link checkBridgeOob} tile footprint, outside the narrow safe deck).
+   */
+  private addBridgeHazardSurround(rotationY: number): void {
+    const mat = hazardBridgeGapRed(0.58);
+    const laneX = LANE_HALF_WIDTH * 1.02;
+    const n = this.narrow;
+    const halfLenZ = TILE_SIZE * 0.46;
+    const capZ = 0.62;
+    const y = 0.035;
+    const h = 0.12;
+
+    const wSide = laneX - n;
+    const cxSide = -(laneX + n) * 0.5;
+
+    const mk = (geo: THREE.BoxGeometry, px: number, pz: number): THREE.Mesh => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(px, y, pz);
+      m.rotation.y = rotationY;
+      m.renderOrder = 4;
+      return m;
+    };
+
+    const gL = mk(
+      new THREE.BoxGeometry(wSide, h, TILE_SIZE * 0.96),
+      cxSide,
+      0,
+    );
+    const gR = mk(
+      new THREE.BoxGeometry(wSide, h, TILE_SIZE * 0.96),
+      -cxSide,
+      0,
+    );
+
+    const wCap = wSide * 0.98;
+    const zF = halfLenZ - capZ * 0.5;
+    const zB = -halfLenZ + capZ * 0.5;
+
+    const gFL = mk(new THREE.BoxGeometry(wCap, h, capZ), cxSide, zF);
+    const gFR = mk(new THREE.BoxGeometry(wCap, h, capZ), -cxSide, zF);
+    const gBL = mk(new THREE.BoxGeometry(wCap, h, capZ), cxSide, zB);
+    const gBR = mk(new THREE.BoxGeometry(wCap, h, capZ), -cxSide, zB);
+
+    this.group.add(gL, gR, gFL, gFR, gBL, gBR);
+  }
+
   constructor(
     id: string,
     weight: number,
@@ -446,6 +531,7 @@ class BridgeHazard extends BaseHazard {
     if (bridgeGlb) {
       this.group.add(bridgeGlb);
       this.group.position.set(cx, 0, cz);
+      this.addBridgeHazardSurround(rotationY);
       return;
     }
 
@@ -457,16 +543,7 @@ class BridgeHazard extends BaseHazard {
     deck.rotation.y = rotationY;
     this.group.add(deck);
 
-    const gapMat = skyBlueTransparent(0.38);
-    const g1 = new THREE.Mesh(
-      new THREE.BoxGeometry(LANE_HALF_WIDTH * 0.85, 0.06, TILE_SIZE * 0.88),
-      gapMat,
-    );
-    g1.position.set(-this.narrow - LANE_HALF_WIDTH * 0.45, -0.08, 0);
-    g1.rotation.y = rotationY;
-    const g2 = g1.clone();
-    g2.position.x *= -1;
-    this.group.add(g1, g2);
+    this.addBridgeHazardSurround(rotationY);
 
     this.group.position.set(cx, 0, cz);
   }
@@ -490,14 +567,98 @@ class BridgeHazard extends BaseHazard {
   }
 }
 
+class BoostPadHazard extends BaseHazard {
+  readonly hazardType = "boost";
+  private readonly ox: number;
+  private readonly oz: number;
+  private readonly fx: number;
+  private readonly fz: number;
+  private readonly rx: number;
+  private readonly rz: number;
+
+  constructor(
+    id: string,
+    weight: number,
+    tileKey: string,
+    cx: number,
+    cz: number,
+    rotationY: number,
+  ) {
+    super(id, weight, tileKey);
+    const b = tileBasis(rotationY);
+    this.ox = cx;
+    this.oz = cz;
+    this.fx = b.fx;
+    this.fz = b.fz;
+    this.rx = b.rx;
+    this.rz = b.rz;
+
+    const arrowMat = boostPadArrowBlue();
+    for (let i = -2; i <= 2; i++) {
+      const a = new THREE.Mesh(
+        new THREE.ConeGeometry(0.15, 0.4, 5, 1, false),
+        arrowMat,
+      );
+      a.rotation.x = Math.PI / 2;
+      a.position.set(0, 0.052, i * 1.05);
+      a.renderOrder = 2;
+      this.group.add(a);
+    }
+
+    const strip = new THREE.Mesh(
+      new THREE.PlaneGeometry(LANE_WIDTH * 0.36, TILE_SIZE * 0.7),
+      new THREE.MeshBasicMaterial({
+        color: 0x256eeb,
+        transparent: true,
+        opacity: 0.18,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    );
+    strip.rotation.x = -Math.PI / 2;
+    strip.position.y = 0.006;
+    strip.renderOrder = 1;
+    this.group.add(strip);
+
+    this.group.position.set(cx, 0, cz);
+    this.group.rotation.y = rotationY;
+  }
+
+  accumulateEnvironment(
+    ctx: HazardBallContext,
+    env: HazardEnvironmental,
+  ): void {
+    const loc = worldToLocalXZ(
+      ctx.position.x,
+      ctx.position.z,
+      this.ox,
+      this.oz,
+      this.rx,
+      this.rz,
+      this.fx,
+      this.fz,
+    );
+    if (Math.abs(loc.lx) > LANE_HALF_WIDTH * 0.5) return;
+    if (loc.lz < -TILE_SIZE * 0.41 || loc.lz > TILE_SIZE * 0.41) return;
+    const push = 34;
+    env.accelX += this.fx * push;
+    env.accelZ += this.fz * push;
+  }
+}
+
 class AxeHazard extends BaseHazard {
   readonly hazardType = "axe";
+  /** Monotonic spin angle (rad) — blade + hit zone stay one direction */
   private phase = 0;
   private readonly cx: number;
   private readonly cz: number;
+  private readonly rx: number;
+  private readonly rz: number;
   private readonly fx: number;
   private readonly fz: number;
   private readonly bladeAnim: THREE.Object3D;
+  private readonly orbitR: number;
+  private readonly spin = 2.15;
 
   constructor(
     id: string,
@@ -511,42 +672,47 @@ class AxeHazard extends BaseHazard {
     const b = tileBasis(rotationY);
     this.cx = cx;
     this.cz = cz;
+    this.rx = b.rx;
+    this.rz = b.rz;
     this.fx = b.fx;
     this.fz = b.fz;
 
     const axeGlb = assetRegistry.getModelClone("hazard_axe");
+    const orbitBase = 1.42 * AXE_SCALE;
+    this.orbitR = axeGlb
+      ? orbitBase * (AXE_GLB_SCALE / AXE_SCALE)
+      : orbitBase;
     if (axeGlb) {
       this.group.add(axeGlb);
       this.bladeAnim =
         axeGlb.getObjectByName("axeBlade") ?? axeGlb;
+      this.group.scale.setScalar(AXE_GLB_SCALE);
       this.group.position.set(cx, 0, cz);
       return;
     }
 
     const blade = new THREE.Mesh(
-      new THREE.BoxGeometry(1.15, 0.22, 0.28),
+      new THREE.BoxGeometry(1.52 * AXE_SCALE, 0.28 * AXE_SCALE, 0.36 * AXE_SCALE),
       bladeSteel(),
     );
     blade.name = "axeBlade";
-    blade.position.set(b.fx * 1.2, 0.55, b.fz * 1.2);
+    blade.position.set(b.fx * 1.28 * AXE_SCALE, 0.58 * AXE_SCALE, b.fz * 1.28 * AXE_SCALE);
     this.group.add(blade);
     this.bladeAnim = blade;
 
     const pivot = new THREE.Mesh(
-      new THREE.BoxGeometry(0.15, 0.65, 0.15),
+      new THREE.BoxGeometry(0.18 * AXE_SCALE, 0.78 * AXE_SCALE, 0.18 * AXE_SCALE),
       woodBrown(),
     );
-    pivot.position.y = 0.85;
+    pivot.position.y = 0.92 * AXE_SCALE;
     this.group.add(pivot);
 
     this.group.position.set(cx, 0, cz);
   }
 
   update(dt: number): void {
-    this.phase += dt * 1.55;
-    this.bladeAnim.rotation.y = Math.sin(this.phase) * 0.95;
-    this.bladeAnim.position.y =
-      0.48 + Math.cos(this.phase) * 0.08;
+    this.phase += dt * this.spin;
+    this.bladeAnim.rotation.y = this.phase;
   }
 
   resolveImpulses(
@@ -555,14 +721,17 @@ class AxeHazard extends BaseHazard {
     _dt: number,
   ): boolean {
     void _dt;
-    const swing = Math.sin(this.phase);
-    const bx = this.cx + this.fx * (1.25 + swing * 0.35);
-    const bz = this.cz + this.fz * (1.25 + swing * 0.35);
+    const c = Math.cos(this.phase);
+    const s = Math.sin(this.phase);
+    const bx =
+      this.cx + this.orbitR * (c * this.rx + s * this.fx);
+    const bz =
+      this.cz + this.orbitR * (c * this.rz + s * this.fz);
 
     const dx = ctx.position.x - bx;
     const dz = ctx.position.z - bz;
     const dist = Math.hypot(dx, dz);
-    if (dist > ctx.radius + 0.55) return false;
+    if (dist > ctx.radius + 0.68) return false;
 
     /** Bounce backward along -forward */
     const backX = -this.fx;
@@ -617,6 +786,9 @@ export function createHazardInstances(
         break;
       case "bridge":
         h = new BridgeHazard(spec.id, spec.weight, key, cx, cz, rot);
+        break;
+      case "boost":
+        h = new BoostPadHazard(spec.id, spec.weight, key, cx, cz, rot);
         break;
       case "axe":
         h = new AxeHazard(spec.id, spec.weight, key, cx, cz, rot);

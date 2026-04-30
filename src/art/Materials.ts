@@ -2,8 +2,8 @@ import * as THREE from "three";
 import { createPixelTexture } from "./PsxStyle";
 
 /** Bundled asset URL — reliable in Vite dev + production (hash-stable) */
-const GOLF_BALL_DIMPLE_ASSET = new URL(
-  "../assets/textures/golf_ball_dimple.png",
+const GOLF_BALL_ALBEDO_ASSET = new URL(
+  "../assets/textures/golf_ball.png",
   import.meta.url,
 ).href;
 
@@ -131,6 +131,18 @@ export function skyBlue(): THREE.MeshStandardMaterial {
   return skyBlueSolid;
 }
 
+/** Speed-pad chevrons on the grass — unlit so they read clearly */
+let boostPadArrowMat: THREE.MeshBasicMaterial | null = null;
+export function boostPadArrowBlue(): THREE.MeshBasicMaterial {
+  if (!boostPadArrowMat) {
+    boostPadArrowMat = new THREE.MeshBasicMaterial({
+      color: 0x1f7cff,
+      toneMapped: false,
+    });
+  }
+  return boostPadArrowMat;
+}
+
 /** Under-bridge / water plane — same hue, no gloss */
 let skyBlueTransMat: THREE.MeshStandardMaterial | null = null;
 export function skyBlueTransparent(opacity = 0.38): THREE.MeshStandardMaterial {
@@ -146,6 +158,29 @@ export function skyBlueTransparent(opacity = 0.38): THREE.MeshStandardMaterial {
     });
   }
   return skyBlueTransMat;
+}
+
+/** Bridge side gaps / OOB strip — reads as danger (not grass or sky water) */
+let hazardBridgeGapRedMat: THREE.MeshStandardMaterial | null = null;
+export function hazardBridgeGapRed(opacity = 0.5): THREE.MeshStandardMaterial {
+  if (
+    !hazardBridgeGapRedMat ||
+    Math.abs(hazardBridgeGapRedMat.opacity - opacity) > 1e-5
+  ) {
+    hazardBridgeGapRedMat = new THREE.MeshStandardMaterial({
+      color: 0xc41e1e,
+      transparent: true,
+      opacity,
+      roughness: 1,
+      metalness: 0,
+      flatShading: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+  }
+  return hazardBridgeGapRedMat;
 }
 
 /** Cup interior / shadow wells — not glossy */
@@ -292,31 +327,32 @@ export function cloudVoid(): THREE.MeshStandardMaterial {
   return cloudVoidMat;
 }
 
-let golfBallDimpleMap: THREE.Texture | null = null;
+let golfBallAlbedoMap: THREE.Texture | null = null;
 
-function getGolfBallDimpleMap(): THREE.Texture {
-  if (!golfBallDimpleMap) {
+function getGolfBallAlbedoMap(): THREE.Texture {
+  if (!golfBallAlbedoMap) {
     const loader = new THREE.TextureLoader();
-    golfBallDimpleMap = loader.load(GOLF_BALL_DIMPLE_ASSET, (tex) => {
+    golfBallAlbedoMap = loader.load(GOLF_BALL_ALBEDO_ASSET, (tex) => {
       tex.needsUpdate = true;
     });
-    golfBallDimpleMap.wrapS = THREE.RepeatWrapping;
-    golfBallDimpleMap.wrapT = THREE.RepeatWrapping;
-    golfBallDimpleMap.repeat.set(3, 3);
-    golfBallDimpleMap.anisotropy = 8;
-    golfBallDimpleMap.colorSpace = THREE.SRGBColorSpace;
-    golfBallDimpleMap.generateMipmaps = true;
-    golfBallDimpleMap.minFilter = THREE.LinearMipmapLinearFilter;
-    golfBallDimpleMap.magFilter = THREE.LinearFilter;
+    golfBallAlbedoMap.wrapS = THREE.RepeatWrapping;
+    golfBallAlbedoMap.wrapT = THREE.RepeatWrapping;
+    /** Single seamless sheet — one wrap around the sphere (was 3×3 tile for dimple-only atlas) */
+    golfBallAlbedoMap.repeat.set(1, 1);
+    golfBallAlbedoMap.anisotropy = 8;
+    golfBallAlbedoMap.colorSpace = THREE.SRGBColorSpace;
+    golfBallAlbedoMap.generateMipmaps = true;
+    golfBallAlbedoMap.minFilter = THREE.LinearMipmapLinearFilter;
+    golfBallAlbedoMap.magFilter = THREE.LinearFilter;
   }
-  return golfBallDimpleMap;
+  return golfBallAlbedoMap;
 }
 
-/** Unlit base — dimple albedo stays visible regardless of scene lighting */
+/** Unlit base — `golf_ball.png` albedo stays visible regardless of scene lighting */
 let defaultBall: THREE.MeshBasicMaterial | null = null;
 export function createDefaultBallMaterial(): THREE.MeshBasicMaterial {
   if (!defaultBall) {
-    const map = getGolfBallDimpleMap();
+    const map = getGolfBallAlbedoMap();
     defaultBall = new THREE.MeshBasicMaterial({
       map,
       color: 0xffffff,

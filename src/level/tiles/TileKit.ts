@@ -23,6 +23,12 @@ import {
 /** Half-width of procedural grass deck (must match deckGrass BoxGeometry) */
 const DECK_HALF_W = (LANE_WIDTH * 0.97) * 0.5;
 
+/** Cup exit marker — tall pole + billboard so the finish reads from distance */
+const HOLE_FLAG_POLE_H = 0.92;
+const HOLE_FLAG_PLANE_W = 0.84;
+const HOLE_FLAG_PLANE_H = 0.56;
+const HOLE_FLAG_POLE_R = 0.048;
+
 /**
  * Lateral offset from course center to rail mesh centers so outer rail faces
  * stay inside the grass quad (older LANE_HALF_WIDTH+rail put rails past the deck).
@@ -85,7 +91,8 @@ export function buildTileGroup(tile: PlacedTile): THREE.Group {
   const root = new THREE.Group();
   root.name = `tile_${tile.type}_${tile.gridX}_${tile.gridZ}`;
 
-  if (!tryAttachTileModel(root, tile)) {
+  const usedModel = tryAttachTileModel(root, tile);
+  if (!usedModel) {
     switch (tile.type) {
       case "start":
         buildStartLocal(root, tile);
@@ -94,15 +101,17 @@ export function buildTileGroup(tile: PlacedTile): THREE.Group {
         buildStraightLocal(root, tile);
         break;
       case "corner":
-        buildCornerLocal(root, tile, tile.turnRight ?? true);
+        buildCornerLocal(root, tile);
         break;
       case "curve":
-        buildCurveLocal(root, tile, tile.turnRight ?? true);
+        buildCurveLocal(root, tile);
         break;
       case "hole":
         buildHoleLocal(root, tile);
         break;
     }
+  } else if (tile.type === "hole") {
+    appendProminentHoleFlag(root);
   }
 
   addSparseDecor(root, tile);
@@ -196,15 +205,11 @@ function buildStartLocal(parent: THREE.Object3D, tile: PlacedTile): void {
   islandUnderside(parent, tile);
 }
 
-function buildCornerLocal(
-  parent: THREE.Object3D,
-  tile: PlacedTile,
-  turnRight: boolean,
-): void {
+function buildCornerLocal(parent: THREE.Object3D, tile: PlacedTile): void {
   deckGrass(parent);
   deckGrassAlongX(parent);
   const railMat = creamRailMaterial();
-  const sign = turnRight ? 1 : -1;
+  const { sx, sz } = tile.railS ?? { sx: -1, sz: -1 };
   const side = railSideOffset();
 
   const railAlongZ = new THREE.Mesh(
@@ -212,7 +217,7 @@ function buildCornerLocal(
     railMat,
   );
   railAlongZ.position.set(
-    sign * side,
+    sx * side,
     RAIL_HEIGHT * 0.35 - 0.07,
     0,
   );
@@ -224,23 +229,19 @@ function buildCornerLocal(
   railAlongX.position.set(
     0,
     RAIL_HEIGHT * 0.35 - 0.07,
-    sign * side,
+    sz * side,
   );
 
   parent.add(railAlongZ, railAlongX);
   islandUnderside(parent, tile);
 }
 
-function buildCurveLocal(
-  parent: THREE.Object3D,
-  tile: PlacedTile,
-  turnRight: boolean,
-): void {
+function buildCurveLocal(parent: THREE.Object3D, tile: PlacedTile): void {
   deckGrass(parent, TILE_SIZE);
   deckGrassAlongX(parent);
 
   const railMat = creamRailMaterial();
-  const sign = turnRight ? 1 : -1;
+  const { sx, sz } = tile.railS ?? { sx: -1, sz: -1 };
   const segments = 6;
   const outer = railSideOffset();
   const y = RAIL_HEIGHT * 0.35 - 0.07;
@@ -248,19 +249,91 @@ function buildCurveLocal(
   for (let i = 0; i < segments; i++) {
     const t0 = (i / segments) * (Math.PI / 2);
     const t1 = ((i + 1) / segments) * (Math.PI / 2);
-    const mx = (Math.cos(t0) + Math.cos(t1)) * 0.5 * outer * sign;
-    const mz = (Math.sin(t0) + Math.sin(t1)) * 0.5 * outer;
+    const mx = (Math.cos(t0) + Math.cos(t1)) * 0.5 * outer * sx;
+    const mz = (Math.sin(t0) + Math.sin(t1)) * 0.5 * outer * sz;
     const chunk = new THREE.Mesh(
       new THREE.BoxGeometry(RAIL_THICKNESS * 1.15, RAIL_HEIGHT, TILE_SIZE * 0.22),
       railMat,
     );
     chunk.position.set(mx, y, mz);
     const ang = (t0 + t1) * 0.5;
-    chunk.rotation.y = ang * (turnRight ? 1 : -1);
+    chunk.rotation.y = ang * sx * sz;
     parent.add(chunk);
   }
 
   islandUnderside(parent, tile);
+}
+
+/** Animated `flag.gltf` when preloaded; mixer stored on `parent.userData.holeFlagMixer` for the game loop. */
+function attachAnimatedHoleFlag(parent: THREE.Object3D): boolean {
+  const model = assetRegistry.getModelClone("hole_flag");
+  if (!model) return false;
+
+  model.name = "HoleFlagGltf";
+  model.visible = true;
+  model.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).visible = true;
+  });
+  const clips = assetRegistry.getAnimationClips("hole_flag");
+
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3());
+  const targetH = 1.2;
+  /** Base fit to ~lane scale, then ×10 (2× previous ×5) — centered on the hole tile */
+  const FLAG_VISUAL_SCALE = 8;
+  const s =
+    (size.y > 1e-5 ? (targetH / size.y) * 0.42 : 0.32) * FLAG_VISUAL_SCALE;
+  model.scale.setScalar(s);
+  model.rotation.y = Math.PI / 2;
+  model.updateMatrixWorld(true);
+  const b2 = new THREE.Box3().setFromObject(model);
+  model.position.set(0, -b2.min.y , 0.5);
+  parent.add(model);
+
+  if (clips.length > 0) {
+    const mixer = new THREE.AnimationMixer(model);
+    for (const clip of clips) {
+      const act = mixer.clipAction(clip, model);
+      act.setLoop(THREE.LoopRepeat, Infinity);
+      act.play();
+    }
+    parent.userData.holeFlagMixer = mixer;
+  }
+  return true;
+}
+
+/** Procedural pole + cloth if GLTF not ready */
+function addProceduralHoleFlagFallback(parent: THREE.Object3D): void {
+  const pin = new THREE.Mesh(
+    createLowPolyCylinder(
+      HOLE_FLAG_POLE_R,
+      HOLE_FLAG_POLE_R * 1.08,
+      HOLE_FLAG_POLE_H,
+      8,
+    ),
+    creamRailMaterial(),
+  );
+  pin.position.y = HOLE_FLAG_POLE_H * 0.5;
+  pin.name = "HoleExitFlagPole";
+  parent.add(pin);
+
+  const flag = new THREE.Mesh(
+    new THREE.PlaneGeometry(HOLE_FLAG_PLANE_W, HOLE_FLAG_PLANE_H),
+    holeFlagRed(),
+  );
+  flag.position.set(0.34, HOLE_FLAG_POLE_H * 0.78, 0);
+  flag.rotation.y = Math.PI / 2;
+  flag.renderOrder = 5;
+  flag.name = "HoleExitFlagCloth";
+  parent.add(flag);
+}
+
+/** GLB hole tiles skip procedural geometry — animated flag or fallback pole + cloth */
+function appendProminentHoleFlag(parent: THREE.Object3D): void {
+  if (!attachAnimatedHoleFlag(parent)) {
+    addProceduralHoleFlagFallback(parent);
+  }
 }
 
 function addFantasyCoinsAroundCup(parent: THREE.Object3D): void {
@@ -316,20 +389,9 @@ function buildHoleLocal(parent: THREE.Object3D, tile: PlacedTile): void {
   cup.name = "HolePortalSurface";
   parent.add(cup);
 
-  const pin = new THREE.Mesh(
-    createLowPolyCylinder(0.034, 0.045, 0.58, 8),
-    creamRailMaterial(),
-  );
-  pin.position.y = 0.32;
-  parent.add(pin);
-
-  const flag = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.44, 0.3),
-    holeFlagRed(),
-  );
-  flag.position.set(0.24, 0.46, 0);
-  flag.rotation.y = Math.PI / 2;
-  parent.add(flag);
+  if (!attachAnimatedHoleFlag(parent)) {
+    addProceduralHoleFlagFallback(parent);
+  }
 
   addFantasyCoinsAroundCup(parent);
   islandUnderside(parent, tile);

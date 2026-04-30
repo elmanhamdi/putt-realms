@@ -8,6 +8,7 @@ import {
   TILE_SIZE,
   LANE_HALF_WIDTH,
 } from "./TileDimensions";
+import { pathHasPlayableCorridor } from "./pathCorridor";
 import type {
   GeneratedLevel,
   HazardSpawnSpec,
@@ -21,6 +22,8 @@ import {
   type GridCell,
 } from "./pathGen";
 import { generateHazardSpecs } from "./generateHazardSpecs";
+import { bendOuterRailSigns } from "./bendOuterRails";
+import { buildRailColliders } from "./railColliders";
 
 export interface GenerateLevelOptions {
   rng?: () => number;
@@ -136,7 +139,15 @@ export class LevelGenerator {
       dist: number;
     } | null = null;
 
-    for (let attempt = 0; attempt < 30; attempt++) {
+    let bestBlocked: {
+      path: GridCell[];
+      tiles: PlacedTile[];
+      hazardSpecs: HazardSpawnSpec[];
+      score: number;
+      dist: number;
+    } | null = null;
+
+    for (let attempt = 0; attempt < 48; attempt++) {
       const count = Math.max(
         3,
         cellCountForLevel(levelIndex, rng) + Math.floor((rng() - 0.5) * 3),
@@ -153,11 +164,19 @@ export class LevelGenerator {
 
       const { cx, cz } = centerOffsets(path);
       const tiles = this.buildTiles(path, levelIndex, rng, cx, cz);
-      const hazardSpecs = generateHazardSpecs(levelIndex, path.length, rng);
+      const playable = pathHasPlayableCorridor(path, tiles, cx, cz, TILE_SIZE);
+      const hazardSpecs = generateHazardSpecs(levelIndex, tiles, rng);
       const metrics = computeCourseMetrics(path, tiles, hazardSpecs);
       const score = difficultyFromCourseMetrics(metrics);
 
       const dist = Math.abs(score - targetInt);
+
+      if (!playable) {
+        if (!bestBlocked || dist < bestBlocked.dist) {
+          bestBlocked = { path, tiles, hazardSpecs, score, dist };
+        }
+        continue;
+      }
 
       if (!bestAny || dist < bestAny.dist) {
         bestAny = { path, tiles, hazardSpecs, score, dist };
@@ -199,6 +218,32 @@ export class LevelGenerator {
       });
     }
 
+    if (bestBlocked) {
+      return this.assembleLevel(levelIndex, bestBlocked.path, rng, {
+        tiles: bestBlocked.tiles,
+        hazardSpecs: bestBlocked.hazardSpecs,
+        targetDifficulty: targetInt,
+        imperfectDifficulty: true,
+      });
+    }
+
+    for (let fb = 0; fb < 24; fb++) {
+      const fallback = generateSinglePath({
+        cellCount: Math.max(3, cellCountForLevel(levelIndex, rng)),
+        turnBias: turnBiasForLevel(levelIndex),
+        rng,
+      });
+      const { cx: fcx, cz: fcz } = centerOffsets(fallback);
+      const fbTiles = this.buildTiles(fallback, levelIndex, rng, fcx, fcz);
+      if (pathHasPlayableCorridor(fallback, fbTiles, fcx, fcz, TILE_SIZE)) {
+        return this.assembleLevel(levelIndex, fallback, rng, {
+          tiles: fbTiles,
+          targetDifficulty: targetInt,
+          imperfectDifficulty: true,
+        });
+      }
+    }
+
     const fallback = generateSinglePath({
       cellCount: Math.max(3, cellCountForLevel(levelIndex, rng)),
       turnBias: turnBiasForLevel(levelIndex),
@@ -230,7 +275,7 @@ export class LevelGenerator {
       opts.tiles ?? this.buildTiles(path, levelIndex, rng, cx, cz);
     const hazardSpecs =
       opts.hazardSpecs ??
-      generateHazardSpecs(levelIndex, path.length, rng);
+      generateHazardSpecs(levelIndex, tiles, rng);
     const metrics = computeCourseMetrics(path, tiles, hazardSpecs);
     let difficultyScore = difficultyFromCourseMetrics(metrics);
     if (opts.difficultyScoreOverride !== undefined) {
@@ -262,6 +307,7 @@ export class LevelGenerator {
       startPosition: { x: fwx.x + backX, y: 0, z: fwx.z + backZ },
       holePosition: { x: lwx.x, y: 0, z: lwx.z },
       bounds,
+      railColliders: buildRailColliders(tiles),
     };
   }
 
@@ -282,7 +328,7 @@ export class LevelGenerator {
 
       let type: TileType;
       let rotationY: number;
-      let turnRight: boolean | undefined;
+      let railS: { sx: 1 | -1; sz: 1 | -1 } | undefined;
 
       if (i === 0) {
         type = "start";
@@ -303,9 +349,11 @@ export class LevelGenerator {
           type = "straight";
         } else {
           type = levelIndex >= 6 && rng() > 0.42 ? "curve" : "corner";
-          const cross =
-            (b.x - a.x) * (c.z - b.z) - (b.z - a.z) * (c.x - b.x);
-          turnRight = cross > 0;
+          const dxIn = b.x - a.x;
+          const dzIn = b.z - a.z;
+          const dxOut = c.x - b.x;
+          const dzOut = c.z - b.z;
+          railS = bendOuterRailSigns(dxIn, dzIn, dxOut, dzOut);
         }
 
         const nx = next!.x - cur.x;
@@ -321,8 +369,8 @@ export class LevelGenerator {
         worldZ: wz,
         rotationY,
       };
-      if (turnRight !== undefined) {
-        placed.turnRight = turnRight;
+      if (railS !== undefined) {
+        placed.railS = railS;
       }
       tiles.push(placed);
     }
