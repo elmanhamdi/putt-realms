@@ -2,12 +2,12 @@ import { RunPhase } from "../core/RunStateMachine";
 import { publicUrl } from "../core/publicPath";
 
 const PATH = {
-  hit: publicUrl("assets/audio/hit.ogg"),
-  ball: publicUrl("assets/audio/ball_interaction.ogg"),
-  bell: publicUrl("assets/audio/bell.wav"),
-  bg1: publicUrl("assets/audio/bg_1.ogg"),
-  bg2: publicUrl("assets/audio/bg_2.ogg"),
-  bg3: publicUrl("assets/audio/bg_3.ogg"),
+  hit: publicUrl("assets/audio/hit.wav"),
+  ball: publicUrl("assets/audio/ball_interaction.wav"),
+  ballInHole: publicUrl("assets/audio/bal_in_hole.wav"),
+  bg1: publicUrl("assets/audio/bg_1.wav"),
+  bg2: publicUrl("assets/audio/bg_2.wav"),
+  bg3: publicUrl("assets/audio/bg_3.wav"),
 } as const;
 
 /** Level BGM order: was bg2/bg3 alternating; `bg_1` is the third track per round. */
@@ -32,10 +32,10 @@ export class GameAudio {
     void this.playOneShot(PATH.hit, 0.88);
   }
 
-  /** Hole-in / cup success */
-  playBell(): void {
+  /** Ball drops in the cup (phase → LevelComplete). */
+  playBallInHole(): void {
     if (!this.unlocked) return;
-    void this.playOneShot(PATH.bell, 0.92);
+    void this.playOneShot(PATH.ballInHole, 0.92);
   }
 
   /** Rails, bounds, hazards — throttled to avoid machine-gun on multi-contact frames */
@@ -55,7 +55,7 @@ export class GameAudio {
     if (!this.unlocked) return;
 
     if (phase === RunPhase.LevelComplete) {
-      this.playBell();
+      this.playBallInHole();
     }
 
     if (
